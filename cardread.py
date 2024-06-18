@@ -33,7 +33,7 @@ class CardReader:
         self.cur = None
         # Timeout (secs) for all blocking calls
         # This is the longest the app will take to stop when signalled
-        self.timeout = self.config.get('cardread', 'timeout')
+        self.timeout = None
         # Create a persistent API session
         self.requests = requests.Session()
         self.requests.headers.update({"Content-Type": "application/jsonapi"})
@@ -164,6 +164,10 @@ class CardReader:
         config_file = os.path.join(Path.home(), ".config", "cardread", "config.ini")
         self.config = ConfigParser(defaults)
         self.config.read(config_file)
+
+        # Set Timeout
+        self.timeout = self.config.getint('cardread', 'timeout')
+
         # Add API key to headers if defined in config
         if (api_key := self.config.get('cardread', 'api_key')):
             self.requests.headers.update({"JWT": api_key})
@@ -189,7 +193,7 @@ class CardReader:
 
         # Set up API worker pool and wait for them to finish
         workers = []
-        for _ in range(self.config.get("cardread", "workers")):
+        for _ in range(self.config.getint("cardread", "workers")):
             p = multiprocessing.Process(target=self.queue_worker)
             p.start()
             workers.append(p)
