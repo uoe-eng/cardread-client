@@ -8,6 +8,7 @@ import select
 import signal
 import sqlite3
 import time
+from configparser import ConfigParser
 from pathlib import Path
 import requests
 from evdev import InputDevice, categorize, ecodes
@@ -26,21 +27,16 @@ class CardReader:
     """Card Reader Daemon class."""
 
     def __init__(self):
-        self.cache_dir = os.path.join(Path.home(), ".local", "share", "cardread")
+        self.config = None
         # DB connection/cursor
         self.con = None
         self.cur = None
-        # Define the input device path
-        self.device_path = '/dev/input/by-id/usb-Dell_Dell_Wired_Multimedia_Keyboard-event-kbd'
-        # Define the number of worker processes to run
-        self.num_workers = 4
-        self.reader = "Readername"
         # Timeout (secs) for all blocking calls
         # This is the longest the app will take to stop when signalled
-        self.timeout = 5
-        self.headers = {"Content-Type": "application/jsonapi"}
-        self.url = "http://httpbin.org/status/200%2C409%2C500"
-        # self.url = "http://httpbin.org/delay/10"
+        self.timeout = self.config.get('cardread', 'timeout')
+        # Create a persistent API session
+        self.requests = requests.Session()
+        self.requests.headers.update({"Content-Type": "application/jsonapi"})
         self.queue = multiprocessing.Queue()
         # Event object to signal workers to exit
         self.stop_event = multiprocessing.Event()
@@ -49,7 +45,7 @@ class CardReader:
     def event_listener(self):
         """Listen for keypress events, capture 'words' (\n separator) and push to the queue."""
         log.debug("Starting event_listener...")
-        device = InputDevice(self.device_path)
+        device = InputDevice(self.config.get("cardread", "device"))
         word = []
         while not self.stop_event.is_set():
             # Listen for read events on input device fd
@@ -89,11 +85,11 @@ class CardReader:
 
     def http_post(self, jsonapi):
         """POST card data to server, repeating forever until success."""
+        api_url = self.config.get('cardread', 'api_url')
         while not self.stop_event.is_set():
             log.debug("Posting data: %s", jsonapi)
-            response = requests.post(
-                self.url,
-                headers=self.headers,
+            response = self.requests.post(
+                api_url,
                 json=jsonapi,
                 timeout=self.timeout
             )
@@ -122,9 +118,17 @@ class CardReader:
         )
         self.con.commit()
 
-    def create_db(self):
+    def create_cache(self):
         """Set up sqlite3 cache database."""
-        self.con = sqlite3.connect(os.path.join(self.cache_dir, "cardread.db"))
+        # Create cache dir & db
+        cache_dir = os.path.join(Path.home(), ".local", "share", "cardread")
+        try:
+            os.mkdir(cache_dir)
+        except FileExistsError:
+            # Not an error if already present
+            pass
+
+        self.con = sqlite3.connect(os.path.join(cache_dir, "cardread.db"))
         # Add ability to make dicts from rows
         self.con.row_factory = sqlite3.Row
         self.cur = self.con.cursor()
@@ -143,28 +147,40 @@ class CardReader:
             "type": "log",
             "id": "uuid",
             "data": {
-                "reader": self.reader,
+                "reader": self.config.get('cardread', 'name'),
                 "card_id": card_id,
-                "time": timestamp,
+                "timestamp": timestamp,
             }
         }
 
+    def parse_config(self):
+        """Parse config file, using default values."""
+        defaults = {
+            "name": "cardread",
+            "timeout": 5,
+            "workers": 1,
+        }
+
+        config_file = os.path.join(Path.home(), ".config", "cardread", "config.ini")
+        self.config = ConfigParser(defaults)
+        self.config.read(config_file)
+        # Add API key to headers if defined in config
+        if (api_key := self.config.get('cardread', 'api_key')):
+            self.requests.headers.update({"JWT": api_key})
+
+
     def main(self):
         """Main daemon process."""
+
+        self.parse_config()
         # Handle 'stop' signals
         signal.signal(signal.SIGTERM, lambda sig, fr: self.stop_event.set())
         signal.signal(signal.SIGHUP, lambda sig, fr: self.stop_event.set())
         signal.signal(signal.SIGINT, lambda sig, fr: self.stop_event.set())
 
-        # Create cache_dir & db
-        try:
-            os.mkdir(self.cache_dir)
-        except FileExistsError:
-            # Not an error if already present
-            pass
-        self.create_db()
+        self.create_cache()
 
-        # Push cached results
+        # Push cached results to server
         self.push_cache()
 
         # Launch the keyboard listener
@@ -173,7 +189,7 @@ class CardReader:
 
         # Set up API worker pool and wait for them to finish
         workers = []
-        for _ in range(self.num_workers):
+        for _ in range(self.config.get("cardread", "workers")):
             p = multiprocessing.Process(target=self.queue_worker)
             p.start()
             workers.append(p)
