@@ -105,7 +105,7 @@ class CardReader:
         log.debug('Update Cache: %s', jsonapi)
         self.cur.execute(
             'insert into log VALUES (?, ?)',
-            (jsonapi["data"]["card_id"], jsonapi["data"]["time"])
+            (jsonapi["data"]["card_id"], jsonapi["data"]["timestamp"])
         )
         self.con.commit()
 
@@ -114,7 +114,7 @@ class CardReader:
         log.debug('Clear Cache: %s', jsonapi)
         self.cur.execute(
             'DELETE FROM log WHERE card_id = ? and time = ?',
-            (jsonapi["data"]["card_id"], jsonapi["data"]["time"])
+            (jsonapi["data"]["card_id"], jsonapi["data"]["timestamp"])
         )
         self.con.commit()
 
@@ -132,7 +132,7 @@ class CardReader:
         # Add ability to make dicts from rows
         self.con.row_factory = sqlite3.Row
         self.cur = self.con.cursor()
-        self.cur.execute("CREATE TABLE IF NOT EXISTS log(card_id, time)")
+        self.cur.execute("CREATE TABLE IF NOT EXISTS log(card_id, timestamp)")
 
     def push_cache(self):
         """Launch workers to POST previously cached values to the server."""
