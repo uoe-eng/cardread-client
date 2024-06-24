@@ -168,7 +168,7 @@ class CardReader:
 
         # Add API key to headers if defined in config
         if (api_key := self.config.get('cardread', 'api_key')):
-            self.requests.headers.update({"JWT": api_key})
+            self.requests.headers.update({"Authorization: Bearer": api_key})
 
 
     def main(self):
