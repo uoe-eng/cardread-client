@@ -147,7 +147,6 @@ class CardReader:
             "type": "log",
             "id": "uuid",
             "data": {
-                "reader": self.config.get('cardread', 'name'),
                 "card_id": card_id,
                 "timestamp": timestamp,
             }
@@ -156,7 +155,6 @@ class CardReader:
     def parse_config(self):
         """Parse config file, using default values."""
         defaults = {
-            "name": "cardread",
             "timeout": 5,
             "workers": 1,
         }
