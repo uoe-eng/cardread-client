@@ -1,3 +1,4 @@
+#!/bin/python3
 """Card Reader Daemon."""
 
 import logging
@@ -159,7 +160,7 @@ class CardReader:
             "workers": 1,
         }
 
-        config_file = os.path.join(Path.home(), ".config", "cardread", "config.ini")
+        config_file = "/etc/cardread/config.ini")
         self.config = ConfigParser(defaults)
         self.config.read(config_file)
 
