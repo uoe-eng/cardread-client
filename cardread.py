@@ -114,7 +114,7 @@ class CardReader:
         """Delete an entry from the DB cache."""
         log.debug('Clear Cache: %s', jsonapi)
         self.cur.execute(
-            'DELETE FROM log WHERE card_id = ? and time = ?',
+            'DELETE FROM log WHERE card_id = ? and timestamp = ?',
             (jsonapi["data"]["card_id"], jsonapi["data"]["timestamp"])
         )
         self.con.commit()
