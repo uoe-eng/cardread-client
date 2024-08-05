@@ -124,7 +124,7 @@ class CardReader:
         # Create cache dir & db
         cache_dir = os.path.join(Path.home(), ".local", "share", "cardread")
         try:
-            os.mkdir(cache_dir)
+            os.makedirs(cache_dir)
         except FileExistsError:
             # Not an error if already present
             pass
