@@ -15,10 +15,8 @@ import requests
 from evdev import InputDevice, categorize, ecodes
 
 # FIXME:
-# UUIDs?
-# Config file
-# HTTP POST correct URL
-# Safer key mappings for events
+# HTTP POST correct URL and secrets
+# Safer key mappings for events?
 
 logging.basicConfig(level=logging.DEBUG)
 log = logging.getLogger(__name__)
@@ -34,13 +32,22 @@ class CardReader:
         self.cur = None
         # Timeout (secs) for all blocking calls
         # This is the longest the app will take to stop when signalled
-        self.timeout = None
+        self.timeout = 30
+
         # Create a persistent API session
         self.requests = requests.Session()
         self.requests.headers.update({"Content-Type": "application/jsonapi"})
+
+        # Multiprocessing
         self.queue = multiprocessing.Queue()
         # Event object to signal workers to exit
         self.stop_event = multiprocessing.Event()
+        # Event handler to trigger pushes to the API
+        self.push_event = multiprocessing.Event()
+        self.push_lock = multiprocessing.Lock()
+        # Seconds since last push
+        self.last_push = 0
+
         self.main()
 
     def event_listener(self):
@@ -67,7 +74,7 @@ class CardReader:
                         word.append(char)
 
     def queue_worker(self):
-        """Process items from the queue, launching background workers to POST to server."""
+        """Process items from the queue and save to the cache DB."""
         log.debug("Starting queue_worker...")
         # Loop until stop_event received
         while not self.stop_event.is_set():
@@ -80,43 +87,68 @@ class CardReader:
             timestamp = time.time()
             log.debug("Received card_id: %s - %s", timestamp, card_id)
             jsonapi = self.make_jsonapi(card_id, timestamp)
-            self.update_cache(jsonapi)
-            # Launch http_post process in background
-            multiprocessing.Process(target=self.http_post, args=(jsonapi,)).start()
+            self.update_cache_row(jsonapi)
+            # Trigger push event
+            self.push_event.set()
 
-    def http_post(self, jsonapi):
+    def push_event_handler(self):
+        """Call push_cache debounced to every 'timeout' seconds."""
+        while not self.stop_event.is_set():
+            self.push_event.wait()
+            elapsed = time.time() - self.last_push
+            if elapsed <= self.timeout:
+                wait = self.timeout - elapsed
+                log.debug("Debouncing wait: %s", wait)
+                # Wait for the remaining time
+                time.sleep(wait)
+
+            self.push_event.clear()
+            self.push_cache()
+
+    def http_post(self, dbid, jsonapi):
         """POST card data to server, repeating forever until success."""
         api_url = self.config.get('cardread', 'api_url')
-        while not self.stop_event.is_set():
-            log.debug("Posting data: %s", jsonapi)
+        log.debug("Posting data: %s", jsonapi)
+        try:
             response = self.requests.post(
                 api_url,
                 json=jsonapi,
                 timeout=self.timeout
             )
             # Success or Conflict indicates data has reached server successfully
-            if response.status_code in (200, 409):
-                log.debug("Post success: %s %s", jsonapi, response.status_code)
-                self.clear_cache(jsonapi)
-                break
-            time.sleep(self.timeout)
+            if response.status_code not in (200, 409):
+                raise requests.exceptions.RequestException
+        except requests.exceptions.RequestException as err:
+            # Set the row pending again, and trigger a push event to retry
+            log.debug("Post failed: %s %s", jsonapi, err)
+            self.unlock_cache_row(dbid)
+            self.push_event.set()
+        else:
+            log.debug("Post success: %s %s", jsonapi, response.status_code)
+            self.clear_cache_row(jsonapi)
 
-    def update_cache(self, jsonapi):
+    def update_cache_row(self, jsonapi):
         """Add a new entry to the DB cache."""
         log.debug('Update Cache: %s', jsonapi)
         self.cur.execute(
-            'insert into log VALUES (?, ?)',
-            (jsonapi["data"]["card_id"], jsonapi["data"]["timestamp"])
+            'insert into log (card_id, timestamp, state) VALUES (?, ?, ?)',
+            (jsonapi["data"]["card_id"], jsonapi["data"]["timestamp"], "pending")
         )
         self.con.commit()
 
-    def clear_cache(self, jsonapi):
+    def clear_cache_row(self, jsonapi):
         """Delete an entry from the DB cache."""
         log.debug('Clear Cache: %s', jsonapi)
         self.cur.execute(
             'DELETE FROM log WHERE card_id = ? and timestamp = ?',
             (jsonapi["data"]["card_id"], jsonapi["data"]["timestamp"])
         )
+        self.con.commit()
+
+    def unlock_cache_row(self, dbid):
+        """Unlock a row in the DB cache."""
+        log.debug("Unlocking row: %s", dbid)
+        self.cur.execute("UPDATE log SET state = 'pending' WHERE id = ?", (dbid,))
         self.con.commit()
 
     def create_cache(self):
@@ -133,20 +165,39 @@ class CardReader:
         # Add ability to make dicts from rows
         self.con.row_factory = sqlite3.Row
         self.cur = self.con.cursor()
-        self.cur.execute("CREATE TABLE IF NOT EXISTS log(card_id, timestamp)")
+        self.cur.execute("""
+                         CREATE TABLE IF NOT EXISTS log (
+                         id INTEGER PRIMARY KEY AUTOINCREMENT,
+                         card_id,
+                         timestamp,
+                         state)
+                         """)
 
     def push_cache(self):
-        """Launch workers to POST previously cached values to the server."""
-        res = self.cur.execute("select * from log")
-        for card_id, timestamp in dict(res.fetchall()).items():
-            jsonapi = self.make_jsonapi(card_id, timestamp)
-            multiprocessing.Process(target=self.http_post, args=(jsonapi,)).start()
+        """Launch parallel workers to POST previously cached values to the server."""
+
+        # Only allow one push process at a time
+        with self.push_lock:
+            # Lock all pending rows
+            # API updates may take a long time to complete, so lock 'in-flight' rows so they don't get re-POSTed when push_cache re-runs
+            log.debug("Locking rows...")
+            res = self.cur.execute("UPDATE log SET state = 'locked' WHERE state = 'pending' RETURNING id, card_id, timestamp")
+            rows = res.fetchall()
+            self.con.commit()
+
+            # Convert row data to JSON and POST
+            for row in rows:
+                rdict = dict(row)
+                jsonapi = self.make_jsonapi(rdict["card_id"], rdict["timestamp"])
+                multiprocessing.Process(target=self.http_post, args=(rdict["id"], jsonapi)).start()
+
+            # record last-run time for debouncing
+            self.last_push = time.time()
 
     def make_jsonapi(self, card_id, timestamp):
         """Create jsonapi for POST"""
         return {
             "type": "log",
-            "id": "uuid",
             "data": {
                 "card_id": card_id,
                 "timestamp": timestamp,
@@ -171,7 +222,6 @@ class CardReader:
         if (api_key := self.config.get('cardread', 'api_key')):
             self.requests.headers.update({"Authorization": api_key})
 
-
     def main(self):
         """Main daemon process."""
 
@@ -181,16 +231,21 @@ class CardReader:
         signal.signal(signal.SIGHUP, lambda sig, fr: self.stop_event.set())
         signal.signal(signal.SIGINT, lambda sig, fr: self.stop_event.set())
 
+        # Set up the cache DB
         self.create_cache()
 
-        # Push cached results to server
-        self.push_cache()
+        # Start the push event handler process
+        push_ev_handler_process = multiprocessing.Process(target=self.push_event_handler)
+        push_ev_handler_process.start()
 
-        # Launch the keyboard listener
+        # Trigger a push of any outstanding results to server
+        self.push_event.set()
+
+        # Launch the input device listener
         process = multiprocessing.Process(target=self.event_listener)
         process.start()
 
-        # Set up API worker pool and wait for them to finish
+        # Set up worker pool processing input listener events
         workers = []
         for _ in range(self.config.getint("cardread", "workers")):
             p = multiprocessing.Process(target=self.queue_worker)
