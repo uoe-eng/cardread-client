@@ -2,6 +2,7 @@
 """Card Reader Daemon."""
 
 import argparse
+from datetime import datetime
 import logging
 import multiprocessing
 import multiprocessing.queues
@@ -98,7 +99,7 @@ class CardReader:
             except multiprocessing.queues.Empty:
                 # Restart if queue was empty
                 continue
-            timestamp = time.time()
+            timestamp = datetime.fromtimestamp(time.time()).isoformat()
             log.debug("Received card_id: %s - %s", timestamp, card_id)
             jsonapi = self.make_jsonapi(card_id, timestamp)
             self.update_cache_row(jsonapi)
@@ -130,7 +131,7 @@ class CardReader:
                 timeout=self.timeout
             )
             # Success or Conflict indicates data has reached server successfully
-            if response.status_code not in (200, 409):
+            if response.status_code not in (200, 201, 409):
                 raise requests.exceptions.RequestException
         except requests.exceptions.RequestException as err:
             # Set the row pending again, and trigger a push event to retry
@@ -146,7 +147,7 @@ class CardReader:
         log.debug('Update Cache: %s', jsonapi)
         self.cur.execute(
             'insert into log (card_id, timestamp, state) VALUES (?, ?, ?)',
-            (jsonapi["data"]["card_id"], jsonapi["data"]["timestamp"], "pending")
+            (jsonapi["data"]["attributes"]["card_id"], jsonapi["data"]["attributes"]["timestamp"], "pending")
         )
         self.con.commit()
 
@@ -155,7 +156,7 @@ class CardReader:
         log.debug('Clear Cache: %s', jsonapi)
         self.cur.execute(
             'DELETE FROM log WHERE card_id = ? and timestamp = ?',
-            (jsonapi["data"]["card_id"], jsonapi["data"]["timestamp"])
+            (jsonapi["data"]["attributes"]["card_id"], jsonapi["data"]["attributes"]["timestamp"])
         )
         self.con.commit()
 
@@ -211,10 +212,12 @@ class CardReader:
     def make_jsonapi(self, card_id, timestamp):
         """Create jsonapi for POST"""
         return {
-            "type": "log_entries",
             "data": {
-                "card_id": card_id,
-                "timestamp": timestamp,
+                "type": "log_entries",
+                "attributes": {
+                    "card_id": card_id,
+                    "timestamp": timestamp,
+                }
             }
         }
 
