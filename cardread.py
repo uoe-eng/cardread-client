@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 """Card Reader Daemon."""
 
+import argparse
 import logging
 import multiprocessing
 import multiprocessing.queues
@@ -8,6 +9,7 @@ import os
 import select
 import signal
 import sqlite3
+import sys
 import time
 from configparser import ConfigParser
 from pathlib import Path
@@ -22,10 +24,22 @@ logging.basicConfig(level=logging.DEBUG)
 log = logging.getLogger(__name__)
 
 
+def parse_args(argv):
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        'config_uri',
+        default="/etc/cardread/config.ini",
+        help='Configuration file, e.g., development.ini',
+    )
+    args = parser.parse_args(argv[1:])
+    return args
+
+
 class CardReader:
     """Card Reader Daemon class."""
 
-    def __init__(self):
+    def __init__(self, config_uri=None):
+        self.config_uri = config_uri
         self.config = None
         # DB connection/cursor
         self.con = None
@@ -197,7 +211,7 @@ class CardReader:
     def make_jsonapi(self, card_id, timestamp):
         """Create jsonapi for POST"""
         return {
-            "type": "log",
+            "type": "log_entries",
             "data": {
                 "card_id": card_id,
                 "timestamp": timestamp,
@@ -211,9 +225,9 @@ class CardReader:
             "workers": 1,
         }
 
-        config_file = "/etc/cardread/config.ini"
         self.config = ConfigParser(defaults)
-        self.config.read(config_file)
+        print(f'reading config from {self.config_uri}')
+        self.config.read(self.config_uri)
 
         # Set Timeout
         self.timeout = self.config.getint('cardread', 'timeout')
@@ -258,4 +272,4 @@ class CardReader:
 
 
 if __name__ == "__main__":
-    CardReader()
+    CardReader(config_uri=parse_args(sys.argv).config_uri)
