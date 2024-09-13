@@ -2,7 +2,7 @@
 """Card Reader Daemon."""
 
 import argparse
-from datetime import datetime
+from datetime import datetime, timezone
 import logging
 import multiprocessing
 import multiprocessing.queues
@@ -99,7 +99,10 @@ class CardReader:
             except multiprocessing.queues.Empty:
                 # Restart if queue was empty
                 continue
-            timestamp = datetime.fromtimestamp(time.time()).isoformat()
+            # Local time with local timezone attached.
+            timestamp_local = datetime.now().astimezone()
+            # Convert to UTC and to ISO format for transmission to API.
+            timestamp = timestamp_local.astimezone(timezone.utc).isoformat()
             log.debug("Received card_id: %s - %s", timestamp, card_id)
             jsonapi = self.make_jsonapi(card_id, timestamp)
             self.update_cache_row(jsonapi)
