@@ -30,6 +30,7 @@ def parse_args(argv):
     parser.add_argument(
         'config_uri',
         default="/etc/cardread/config.ini",
+        nargs='?',
         help='Configuration file, e.g., development.ini',
     )
     args = parser.parse_args(argv[1:])
