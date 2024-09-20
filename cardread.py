@@ -18,7 +18,6 @@ import requests
 from evdev import InputDevice, categorize, ecodes
 
 # FIXME:
-# HTTP POST correct URL and secrets
 # Safer key mappings for events?
 
 logging.basicConfig(level=logging.DEBUG)
@@ -75,6 +74,7 @@ class CardReader:
             # Listen for read events on input device fd
             r, _, _ = select.select([device.fd], [], [], self.timeout)
             if not r:
+                # Timeout
                 continue
             for event in device.read():
                 # Keypress 'down'
@@ -88,6 +88,7 @@ class CardReader:
                         word = []
                     else:
                         word.append(char)
+        log.debug('Stopping event_listener...')
 
     def queue_worker(self):
         """Process items from the queue and save to the cache DB."""
@@ -98,22 +99,22 @@ class CardReader:
             try:
                 card_id = self.queue.get(timeout=self.timeout)
             except multiprocessing.queues.Empty:
-                # Restart if queue was empty
+                # Timeout
                 continue
-            # Local time with local timezone attached.
-            timestamp_local = datetime.now().astimezone()
-            # Convert to UTC and to ISO format for transmission to API.
-            timestamp = timestamp_local.astimezone(timezone.utc).isoformat()
+            timestamp = datetime.now(timezone.utc).isoformat()
             log.debug("Received card_id: %s - %s", timestamp, card_id)
             jsonapi = self.make_jsonapi(card_id, timestamp)
             self.update_cache_row(jsonapi)
             # Trigger push event
             self.push_event.set()
+        logging.debug("Stopping queue_worker...")
 
     def push_event_handler(self):
         """Call push_cache debounced to every 'timeout' seconds."""
         while not self.stop_event.is_set():
-            self.push_event.wait()
+            if not self.push_event.wait(timeout=self.timeout):
+                # Timeout
+                continue
             elapsed = time.time() - self.last_push
             if elapsed <= self.timeout:
                 wait = self.timeout - elapsed
@@ -123,6 +124,8 @@ class CardReader:
 
             self.push_event.clear()
             self.push_cache()
+        logging.debug("Stopping push_event_handler...")
+
 
     def http_post(self, dbid, jsonapi):
         """POST card data to server, repeating forever until success."""
@@ -247,10 +250,10 @@ class CardReader:
         """Main daemon process."""
 
         self.parse_config()
+
         # Handle 'stop' signals
-        signal.signal(signal.SIGTERM, lambda sig, fr: self.stop_event.set())
-        signal.signal(signal.SIGHUP, lambda sig, fr: self.stop_event.set())
-        signal.signal(signal.SIGINT, lambda sig, fr: self.stop_event.set())
+        for signl in (signal.SIGINT, signal.SIGHUP, signal.SIGTERM):
+            signal.signal(signl, lambda sig, fr: self.stop_event.set())
 
         # Set up the cache DB
         self.create_cache()
