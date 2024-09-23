@@ -45,9 +45,11 @@ class CardReader:
         # DB connection/cursor
         self.con = None
         self.cur = None
+        # Timeout for http POSTs
+        self.http_timeout = 10
         # Timeout (secs) for all blocking calls
         # This is the longest the app will take to stop when signalled
-        self.timeout = 30
+        self.proc_timeout = 2
 
         # Create a persistent API session
         self.requests = requests.Session()
@@ -72,7 +74,7 @@ class CardReader:
         word = []
         while not self.stop_event.is_set():
             # Listen for read events on input device fd
-            r, _, _ = select.select([device.fd], [], [], self.timeout)
+            r, _, _ = select.select([device.fd], [], [], self.proc_timeout)
             if not r:
                 # Timeout
                 continue
@@ -97,7 +99,7 @@ class CardReader:
         while not self.stop_event.is_set():
             # Blocks waiting for queue item
             try:
-                card_id = self.queue.get(timeout=self.timeout)
+                card_id = self.queue.get(timeout=self.proc_timeout)
             except multiprocessing.queues.Empty:
                 # Timeout
                 continue
@@ -112,12 +114,12 @@ class CardReader:
     def push_event_handler(self):
         """Call push_cache debounced to every 'timeout' seconds."""
         while not self.stop_event.is_set():
-            if not self.push_event.wait(timeout=self.timeout):
+            if not self.push_event.wait(timeout=self.proc_timeout):
                 # Timeout
                 continue
             elapsed = time.time() - self.last_push
-            if elapsed <= self.timeout:
-                wait = self.timeout - elapsed
+            if elapsed <= self.proc_timeout:
+                wait = self.proc_timeout - elapsed
                 log.debug("Debouncing wait: %s", wait)
                 # Wait for the remaining time
                 time.sleep(wait)
@@ -135,7 +137,7 @@ class CardReader:
             response = self.requests.post(
                 api_url,
                 json=jsonapi,
-                timeout=self.timeout
+                timeout=self.http_timeout
             )
             # Success or Conflict indicates data has reached server successfully
             if response.status_code not in (200, 201, 409):
@@ -231,7 +233,8 @@ class CardReader:
     def parse_config(self):
         """Parse config file, using default values."""
         defaults = {
-            "timeout": 5,
+            "http_timeout": 10,
+            "proc_timeout": 2,
             "workers": 1,
         }
 
@@ -240,7 +243,9 @@ class CardReader:
         self.config.read(self.config_uri)
 
         # Set Timeout
-        self.timeout = self.config.getint('cardread', 'timeout')
+        self.http_timeout = self.config.getint('cardread', 'http_timeout')
+        self.proc_timeout = self.config.getint('cardread', 'proc_timeout')
+
 
         # Add API key to headers if defined in config
         if (api_key := self.config.get('cardread', 'api_key')):
