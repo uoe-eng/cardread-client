@@ -169,10 +169,14 @@ class CardReader:
         )
         self.con.commit()
 
-    def unlock_cache_row(self, dbid):
-        """Unlock a row in the DB cache."""
-        log.debug("Unlocking row: %s", dbid)
-        self.cur.execute("UPDATE log SET state = 'pending' WHERE id = ?", (dbid,))
+    def unlock_cache_row(self, dbid=None):
+        """Unlock rows in the DB cache."""
+        if not dbid:
+            log.debug("Unlocking all rows")
+            self.cur.execute("UPDATE log SET state = 'pending'")
+        else:
+            log.debug("Unlocking row: %s", dbid)
+            self.cur.execute("UPDATE log SET state = 'pending' WHERE id = ?", (dbid,))
         self.con.commit()
 
     def create_cache(self):
@@ -266,6 +270,9 @@ class CardReader:
         # Start the push event handler process
         push_ev_handler_process = multiprocessing.Process(target=self.push_event_handler)
         push_ev_handler_process.start()
+
+        # Unlock any stale locked rows
+        self.unlock_cache_row()
 
         # Trigger a push of any outstanding results to server
         self.push_event.set()
