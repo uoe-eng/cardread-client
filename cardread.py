@@ -2,11 +2,13 @@
 """Card Reader Daemon."""
 
 import argparse
+import base64
 from datetime import datetime, timezone
 import logging
 import multiprocessing
 import multiprocessing.queues
 import os
+
 import select
 import signal
 import sqlite3
@@ -15,10 +17,11 @@ import time
 from configparser import ConfigParser
 from pathlib import Path
 import requests
+import rsa
 from evdev import InputDevice, categorize, ecodes
 
 # FIXME:
-# Safer key mappings for events?
+# Set log level from config.ini
 
 logging.basicConfig(level=logging.DEBUG)
 log = logging.getLogger(__name__)
@@ -65,6 +68,8 @@ class CardReader:
         # Seconds since last push
         self.last_push = 0
 
+        self.pubkey = None
+
         self.main()
 
     def event_listener(self):
@@ -99,10 +104,13 @@ class CardReader:
         while not self.stop_event.is_set():
             # Blocks waiting for queue item
             try:
-                card_id = self.queue.get(timeout=self.proc_timeout)
+                card_id = self.queue.get(timeout=self.proc_timeout).encode('utf-8')
             except multiprocessing.queues.Empty:
                 # Timeout
                 continue
+            if self.pubkey:
+                log.debug("Encrypting card id with RSA pubkey...")
+                card_id = base64.b64encode(rsa.encrypt(card_id, self.pubkey))
             timestamp = datetime.now(timezone.utc).isoformat()
             log.debug("Received card_id: %s - %s", timestamp, card_id)
             jsonapi = self.make_jsonapi(card_id, timestamp)
@@ -127,7 +135,6 @@ class CardReader:
             self.push_event.clear()
             self.push_cache()
         logging.debug("Stopping push_event_handler...")
-
 
     def http_post(self, dbid, jsonapi):
         """POST card data to server, repeating forever until success."""
@@ -234,6 +241,11 @@ class CardReader:
             }
         }
 
+    def load_rsa_pubkey(self):
+        if (rsa_pubkey := self.config.get('cardread', 'rsa_pubkey').encode('utf-8')):
+            print(rsa_pubkey)
+            self.pubkey = rsa.PublicKey.load_pkcs1(rsa_pubkey)
+
     def parse_config(self):
         """Parse config file, using default values."""
         defaults = {
@@ -246,10 +258,11 @@ class CardReader:
         print(f'reading config from {self.config_uri}')
         self.config.read(self.config_uri)
 
+        self.load_rsa_pubkey()
+
         # Set Timeout
         self.http_timeout = self.config.getint('cardread', 'http_timeout')
         self.proc_timeout = self.config.getint('cardread', 'proc_timeout')
-
 
         # Add API key to headers if defined in config
         if (api_key := self.config.get('cardread', 'api_key')):
