@@ -106,7 +106,7 @@ class CardReader:
                 continue
             if self.pubkey:
                 log.debug("Encrypting card id with RSA pubkey...")
-                card_id = base64.b64encode(rsa.encrypt(card_id, self.pubkey))
+                card_id = base64.b64encode(rsa.encrypt(card_id, self.pubkey)).decode('utf-8')
             timestamp = datetime.now(timezone.utc).isoformat()
             log.debug("Received card_id: %s - %s", timestamp, card_id)
             jsonapi = self.make_jsonapi(card_id, timestamp)
