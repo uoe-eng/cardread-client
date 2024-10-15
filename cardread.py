@@ -20,10 +20,6 @@ import requests
 import rsa
 from evdev import InputDevice, categorize, ecodes
 
-# FIXME:
-# Set log level from config.ini
-
-logging.basicConfig(level=logging.DEBUG)
 log = logging.getLogger(__name__)
 
 
@@ -243,21 +239,25 @@ class CardReader:
 
     def load_rsa_pubkey(self):
         if (rsa_pubkey := self.config.get('cardread', 'rsa_pubkey').encode('utf-8')):
-            print(rsa_pubkey)
+            # Don't catch encryption exceptions to avoid using unencrypted data
             self.pubkey = rsa.PublicKey.load_pkcs1(rsa_pubkey)
 
     def parse_config(self):
         """Parse config file, using default values."""
         defaults = {
             "http_timeout": 10,
+            "log_level": "INFO",
             "proc_timeout": 2,
             "workers": 1,
         }
 
         self.config = ConfigParser(defaults)
-        print(f'reading config from {self.config_uri}')
         self.config.read(self.config_uri)
 
+        logging.basicConfig(level=getattr(logging, self.config.get('cardread', 'log_level').upper()))
+        log.debug("Read config from: %s", self.config_uri)
+
+        # Try to load pubkey if defined
         self.load_rsa_pubkey()
 
         # Set Timeout
