@@ -71,7 +71,13 @@ class CardReader:
     def event_listener(self):
         """Listen for keypress events, capture 'words' (\n separator) and push to the queue."""
         log.debug("Starting event_listener...")
-        device = InputDevice(self.config.get("cardread", "device"))
+        try:
+            device = InputDevice(self.config.get("cardread", "device"))
+        # All exceptions are bad here...
+        except Exception as err:
+            log.error("Error reading input device: %s", err)
+            self.stop_event.set()
+
         word = []
         while not self.stop_event.is_set():
             # Listen for read events on input device fd
@@ -79,18 +85,22 @@ class CardReader:
             if not r:
                 # Timeout
                 continue
-            for event in device.read():
-                # Keypress 'down'
-                if event.type == ecodes.EV_KEY and event.value == 1:
-                    key_event = categorize(event)
-                    # Translate keycode to char
-                    char = key_event.keycode.split('_')[1].lower()
-                    # Add chars to word until enter received, then push to Queue
-                    if char == "enter":
-                        self.queue.put(''.join(word))
-                        word = []
-                    else:
-                        word.append(char)
+            try:
+                for event in device.read():
+                    # Keypress 'down'
+                    if event.type == ecodes.EV_KEY and event.value == 1:
+                        key_event = categorize(event)
+                        # Translate keycode to char
+                        char = key_event.keycode.split('_')[1].lower()
+                        # Add chars to word until enter received, then push to Queue
+                        if char == "enter":
+                            self.queue.put(''.join(word))
+                            word = []
+                        else:
+                            word.append(char)
+            except OSError as err:
+                log.error("Error reading input device: %s", err)
+                self.stop_event.set()
         log.debug('Stopping event_listener...')
 
     def queue_worker(self):
