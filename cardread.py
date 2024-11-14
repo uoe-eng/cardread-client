@@ -248,7 +248,8 @@ class CardReader:
         }
 
     def load_rsa_pubkey(self):
-        if (rsa_pubkey := self.config.get('cardread', 'rsa_pubkey').encode('utf-8')):
+        if self.config.has_option('cardread', 'rsa_pubkey'):
+            rsa_pubkey = self.config.get('cardread', 'rsa_pubkey').encode('utf-8')
             # Don't catch encryption exceptions to avoid using unencrypted data
             self.pubkey = rsa.PublicKey.load_pkcs1(rsa_pubkey)
 
