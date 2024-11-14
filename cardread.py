@@ -110,13 +110,13 @@ class CardReader:
         while not self.stop_event.is_set():
             # Blocks waiting for queue item
             try:
-                card_id = self.queue.get(timeout=self.proc_timeout).encode('utf-8')
+                card_id = self.queue.get(timeout=self.proc_timeout)
             except multiprocessing.queues.Empty:
                 # Timeout
                 continue
             if self.pubkey:
                 log.debug("Encrypting card id with RSA pubkey...")
-                card_id = base64.b64encode(rsa.encrypt(card_id, self.pubkey)).decode('utf-8')
+                card_id = base64.b64encode(rsa.encrypt(card_id.encode('utf-8'), self.pubkey)).decode('utf-8')
             timestamp = datetime.now(timezone.utc).isoformat()
             log.debug("Received card_id: %s - %s", timestamp, card_id)
             jsonapi = self.make_jsonapi(card_id, timestamp)
